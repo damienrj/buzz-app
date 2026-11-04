@@ -301,6 +301,7 @@ const thinkingOptions = (
   effectiveEffort: string,
   selected?: Model,
   catalog?: Catalog,
+  showUnavailableWithoutCatalog = false,
 ) => {
   const supported = selected?.supportedReasoningEfforts ?? [];
   return [
@@ -313,9 +314,10 @@ const thinkingOptions = (
       ? [
           {
             value: effort,
-            label: catalog
-              ? `${effortName(effort)} (unavailable)`
-              : effortName(effort),
+            label:
+              catalog || showUnavailableWithoutCatalog
+                ? `${effortName(effort)} (unavailable)`
+                : effortName(effort),
           },
         ]
       : []),
@@ -541,7 +543,11 @@ export function createTabs(
     const { effort } = current;
     const effective = provider.resolve({ ...current, effort: "" });
     const selected = catalogModel(effective.model, data);
+    const previousModel = useRef(current.model);
     useEffect(() => {
+      const modelChanged = previousModel.current !== current.model;
+      previousModel.current = current.model;
+      if (modelChanged) return;
       if (disabled || checking || !data || !effort || !selected) return;
       if (
         !selected.supportedReasoningEfforts.some(
@@ -549,7 +555,16 @@ export function createTabs(
         )
       )
         onChange(readConfig({ ...config, effort: "" }));
-    }, [checking, config, data, disabled, effort, onChange, selected]);
+    }, [
+      checking,
+      config,
+      current.model,
+      data,
+      disabled,
+      effort,
+      onChange,
+      selected,
+    ]);
     const efforts = thinkingOptions(
       current.effort,
       effective.effort,
@@ -558,6 +573,7 @@ export function createTabs(
     );
     return (
       <Select
+        key={current.model || "inherited"}
         label="Thinking"
         valueLabel={
           current.effort
@@ -1074,6 +1090,7 @@ export function createTabs(
       effective.effort,
       selected,
       data,
+      true,
     );
     const configChanged = JSON.stringify(draft) !== JSON.stringify(saved);
     const changed = configChanged || Boolean(settingsHost?.pendingSave);

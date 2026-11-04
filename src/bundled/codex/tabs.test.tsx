@@ -1201,9 +1201,8 @@ it("uses Codex's supported efforts at creation and reopens the saved choice", as
   );
 });
 
-it("returns an unsupported Codex effort to Default after a successful catalog refresh", async () => {
-  const modelAReasoningEfforts = ["low", "high"];
-  const f = fixture({ modelAReasoningEfforts });
+it("passes the real Codex Thinking choice through Create agent", async () => {
+  const f = fixture();
   await f.provider.check();
   const registeredType = {
     key: "buzz.codex/codex",
@@ -1211,6 +1210,7 @@ it("returns an unsupported Codex effort to Default after a successful catalog re
     revision: "r1",
     title: "Codex",
     defaults: () => ({ config: { ...defaults } }),
+    Create: f.tabs.Create,
     CreateModel: f.tabs.CreateModel,
     CreateThinking: f.tabs.CreateThinking,
   } as unknown as RegisteredAgentType;
@@ -1227,7 +1227,6 @@ it("returns an unsupported Codex effort to Default after a successful catalog re
     <AgentCreateDialog
       agents={{ create } as unknown as Agents}
       types={[registeredType]}
-      onCreate={create}
       onCreated={vi.fn()}
       onClose={vi.fn()}
     />,
@@ -1235,6 +1234,71 @@ it("returns an unsupported Codex effort to Default after a successful catalog re
   const dialog = screen.getByRole("dialog", { name: "Create agent" });
   const user = userEvent.setup();
   await user.type(within(dialog).getByLabelText("Name"), "Nova");
+
+  const thinking = within(dialog).getByRole("combobox", { name: "Thinking" });
+  await waitFor(() => expect(thinking).toBeEnabled());
+  expect(thinking).toHaveTextContent("Low · Default");
+  await user.click(thinking);
+  await user.click(await screen.findByRole("option", { name: "High" }));
+  await user.click(
+    within(dialog).getByRole("button", { name: "Create agent" }),
+  );
+
+  await waitFor(() => expect(create).toHaveBeenCalledOnce());
+  expect(create).toHaveBeenCalledWith(
+    expect.objectContaining({
+      type: "buzz.codex/codex",
+      config: expect.objectContaining({ model: "", effort: "high" }),
+    }),
+  );
+  expect(saved?.config).toMatchObject({ model: "", effort: "high" });
+
+  if (!saved) throw new Error("Agent was not saved");
+  view.unmount();
+  render(<f.tabs.SettingsTab {...f.props(saved.config)} />);
+  expect(screen.getByRole("combobox", { name: "Thinking" })).toHaveTextContent(
+    "High",
+  );
+});
+
+it("returns an unsupported Codex effort to Default after a successful catalog refresh", async () => {
+  const modelAReasoningEfforts = ["low", "high"];
+  const f = fixture({ modelAReasoningEfforts });
+  await f.provider.check();
+  const registeredType = {
+    key: "buzz.codex/codex",
+    pluginId: "buzz.codex",
+    revision: "r1",
+    title: "Codex",
+    defaults: () => ({ config: { ...defaults } }),
+    Create: f.tabs.Create,
+    CreateModel: f.tabs.CreateModel,
+    CreateThinking: f.tabs.CreateThinking,
+  } as unknown as RegisteredAgentType;
+  let saved: Agent<Config> | undefined;
+  const create = vi.fn(async (input: NewAgent) => {
+    saved = {
+      ...f.props({ ...defaults, ...(input.config as Config) }).agent,
+      name: input.name,
+      type: input.type,
+    };
+    return saved;
+  });
+  const view = render(
+    <AgentCreateDialog
+      agents={{ create } as unknown as Agents}
+      types={[registeredType]}
+      onCreated={vi.fn()}
+      onClose={vi.fn()}
+    />,
+  );
+  const dialog = screen.getByRole("dialog", { name: "Create agent" });
+  const user = userEvent.setup();
+  await user.type(within(dialog).getByLabelText("Name"), "Nova");
+  await user.type(
+    within(dialog).getByLabelText(/Instructions/),
+    "Keep the answer focused.",
+  );
 
   const thinking = within(dialog).getByRole("combobox", { name: "Thinking" });
   await waitFor(() => expect(thinking).toBeEnabled());
@@ -1263,10 +1327,18 @@ it("returns an unsupported Codex effort to Default after a successful catalog re
   expect(create).toHaveBeenCalledWith(
     expect.objectContaining({
       type: "buzz.codex/codex",
-      config: expect.objectContaining({ model: "", effort: "" }),
+      config: expect.objectContaining({
+        model: "",
+        effort: "",
+        instructions: "Keep the answer focused.",
+      }),
     }),
   );
-  expect(saved?.config).toMatchObject({ model: "", effort: "" });
+  expect(saved?.config).toMatchObject({
+    model: "",
+    effort: "",
+    instructions: "Keep the answer focused.",
+  });
 
   if (!saved) throw new Error("Agent was not saved");
   view.unmount();
@@ -1279,12 +1351,12 @@ it("returns an unsupported Codex effort to Default after a successful catalog re
 it.each([
   {
     catalog: ["medium"],
-    scenario: "the effort is unsupported",
-    expectedEffort: "",
+    scenario: "only the new model default is supported",
+    expectedEffort: "medium",
   },
   {
     catalog: ["medium", "high"],
-    scenario: "the effort is still supported",
+    scenario: "the previous value is also supported",
     expectedEffort: "medium",
   },
 ])(
@@ -1322,6 +1394,11 @@ it.each([
     await user.click(await screen.findByRole("combobox", { name: "Model" }));
     await user.click(await screen.findByRole("option", { name: "Model B" }));
 
+    expect(changes).toContainEqual({
+      ...defaults,
+      model: "model-b",
+      effort: expectedEffort,
+    });
     await waitFor(() =>
       expect(changes.at(-1)).toEqual({
         ...defaults,
@@ -1329,9 +1406,9 @@ it.each([
         effort: expectedEffort,
       }),
     );
-    expect(thinking).toHaveTextContent(
-      expectedEffort ? "Medium" : "Medium · Default",
-    );
+    expect(
+      screen.getByRole("combobox", { name: "Thinking" }),
+    ).toHaveTextContent(expectedEffort ? "Medium" : "Medium · Default");
   },
 );
 
@@ -1366,7 +1443,7 @@ it("preserves an explicit Codex effort when the catalog fails", async () => {
   const onChange = vi.fn();
   const Thinking = f.tabs.CreateThinking;
   if (!Thinking) throw new Error("Missing Thinking control");
-  render(
+  const view = render(
     <>
       <f.tabs.CreateModel
         config={config}
@@ -1382,6 +1459,12 @@ it("preserves an explicit Codex effort when the catalog fails", async () => {
   expect(thinking).toHaveTextContent("High");
   expect(thinking).not.toHaveTextContent("High (unavailable)");
   expect(onChange).not.toHaveBeenCalled();
+
+  view.unmount();
+  render(<f.tabs.SettingsTab {...f.props({ ...defaults, effort: "high" })} />);
+  expect(screen.getByRole("combobox", { name: "Thinking" })).toHaveTextContent(
+    "High (unavailable)",
+  );
 });
 
 it("shows the default workspace and restores it when the field is cleared", async () => {
